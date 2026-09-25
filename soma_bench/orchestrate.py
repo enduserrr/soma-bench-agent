@@ -26,8 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_GUARD, ARMS, BENCH_ROOT, RUNS_DIR,
-               TASKS_DIR, load_json, save_json, sh)
+from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_AGE, ARM_SOMA_GUARD, ARMS,
+               BENCH_ROOT, RUNS_DIR, TASKS_DIR, load_json, save_json, sh)
 from . import scoring
 from . import arm_setup, runner, verify as verify_mod
 
@@ -224,6 +224,10 @@ def cmd_score(args):
             entry["delta_guard_vs_soma"] = _delta(
                 {ARM_SOMA: entry[ARM_SOMA_GUARD], ARM_BASELINE: entry[ARM_SOMA]},
                 soma_key=ARM_SOMA)
+        if by_arm.get(ARM_SOMA_AGE) and by_arm.get(ARM_SOMA):
+            entry["delta_age_vs_soma"] = _delta(
+                {ARM_SOMA: entry[ARM_SOMA_AGE], ARM_BASELINE: entry[ARM_SOMA]},
+                soma_key=ARM_SOMA)
         token_table.append(entry)
     summary["per_task"] = token_table
 
@@ -232,10 +236,12 @@ def cmd_score(args):
     # separately against the shared baseline so guard vs current compare cleanly.
     task_rows = []
     task_rows_guard = []
+    task_rows_age = []
     for task_name, by_arm in sorted(per_task.items()):
         base = by_arm.get(ARM_BASELINE, [])
         n_base = len(base)
-        for miner_arm, out_rows in ((ARM_SOMA, task_rows), (ARM_SOMA_GUARD, task_rows_guard)):
+        for miner_arm, out_rows in ((ARM_SOMA, task_rows), (ARM_SOMA_GUARD, task_rows_guard),
+                                    (ARM_SOMA_AGE, task_rows_age)):
             miner = by_arm.get(miner_arm, [])
             if not miner and not base:
                 continue
@@ -263,6 +269,8 @@ def cmd_score(args):
     summary["dendrite_scoring"] = _score_block(task_rows)
     if task_rows_guard:
         summary["dendrite_scoring_guard"] = _score_block(task_rows_guard)
+    if task_rows_age:
+        summary["dendrite_scoring_age"] = _score_block(task_rows_age)
 
     # SOMA engine accounting (bench copies only — never the live plugin)
     def _load_acct(engine_dir):
@@ -296,6 +304,9 @@ def cmd_score(args):
     guard_acct = _load_acct(arm_setup.GUARD_ENGINE_DIR)
     if guard_acct:
         summary["guard_engine_accounting"] = _acct_block(guard_acct)
+    age_acct = _load_acct(arm_setup.AGE_ENGINE_DIR)
+    if age_acct:
+        summary["age_engine_accounting"] = _acct_block(age_acct)
 
     save_json(tag_dir / "summary.json", summary)
     print(f"scored -> {tag_dir / 'summary.json'}")
@@ -392,8 +403,13 @@ def _print_summary(s):
         if dg:
             print(f"{'':24} {'G-S':8} wt {dg['weighted_tokens_pct']}% chars {dg['chars_pct']}% "
                   f"resolved {dg['resolved_delta']:+d}  (guard vs current soma)")
+        da = e.get("delta_age_vs_soma")
+        if da:
+            print(f"{'':24} {'A-S':8} wt {da['weighted_tokens_pct']}% chars {da['chars_pct']}% "
+                  f"resolved {da['resolved_delta']:+d}  (age vs current soma)")
     for key, label in (("dendrite_scoring", "miner=SOMA (current)"),
-                       ("dendrite_scoring_guard", "miner=SOMA-GUARD (patched)")):
+                       ("dendrite_scoring_guard", "miner=SOMA-GUARD (patched)"),
+                       ("dendrite_scoring_age", "miner=SOMA-AGE (age-tiered)")):
         ds = s.get(key)
         if not ds:
             continue
@@ -407,7 +423,8 @@ def _print_summary(s):
               f"raw={agg.get('raw_total'):.3f} "
               f"final_normalized={ds.get('final_normalized_score'):.3f}")
     for key, label in (("soma_engine_accounting", "SOMA engine (bench copy)"),
-                       ("guard_engine_accounting", "GUARD engine (bench copy)")):
+                       ("guard_engine_accounting", "GUARD engine (bench copy)"),
+                       ("age_engine_accounting", "AGE engine (bench copy)")):
         se = s.get(key)
         if not se:
             continue
@@ -433,8 +450,8 @@ def main(argv=None):
 
     p = sub.add_parser("run", help="run tasks across arms")
     p.add_argument("-t", "--task", action="append", help="task name (repeatable); default all")
-    p.add_argument("--arms", default="soma,baseline,soma-guard",
-                   help="comma-separated arms (soma, baseline, soma-guard)")
+    p.add_argument("--arms", default="soma,baseline,soma-age",
+                   help="comma-separated arms (soma, baseline, soma-guard, soma-age)")
     p.add_argument("--repeats", type=int, default=0, help="0 = task default (1)")
     p.add_argument("--max-turns", type=int, default=0)
     p.add_argument("--timeout", type=int, default=1800, help="per-run seconds")

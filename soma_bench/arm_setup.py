@@ -19,20 +19,27 @@ import shutil
 from pathlib import Path
 
 from . import (BENCH_ENGINE_DIR, BENCH_ENGINE_SYMLINK, LIVE_CONFIG,
-               LIVE_SOMA_PLUGIN, PROFILES_DIR, ARM_BASELINE, ARM_SOMA)
+               LIVE_SOMA_PLUGIN, PROFILES_DIR, ARM_BASELINE, ARM_SOMA,
+               ARM_SOMA_AGE)
 
 # Guard variant: 'soma-guard' arm = live copy + patches/marginal_guard.patch.
 ARM_SOMA_GUARD = "soma-guard"
 GUARD_ENGINE_DIRNAME = "somaguard"
+# Age variant: 'soma-age' arm = live copy + patches/age_tier.patch.
+AGE_ENGINE_DIRNAME = "somaage"
 PATCHES_DIR = Path(__file__).resolve().parent / "patches"
 GUARD_PATCH = PATCHES_DIR / "marginal_guard.patch"
+AGE_PATCH = PATCHES_DIR / "age_tier.patch"
 GUARD_ENGINE_DIR = BENCH_ENGINE_DIR.parent / GUARD_ENGINE_DIRNAME
 GUARD_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / GUARD_ENGINE_DIRNAME
+AGE_ENGINE_DIR = BENCH_ENGINE_DIR.parent / AGE_ENGINE_DIRNAME
+AGE_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / AGE_ENGINE_DIRNAME
 
 ARM_ENGINE = {ARM_SOMA: "somabench", ARM_BASELINE: "compressor",
-              ARM_SOMA_GUARD: GUARD_ENGINE_DIRNAME}
+              ARM_SOMA_GUARD: GUARD_ENGINE_DIRNAME,
+              ARM_SOMA_AGE: AGE_ENGINE_DIRNAME}
 
-ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD)
+ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE)
 
 
 def _apply_patch_file(patch: Path, target_dir: Path) -> None:
@@ -159,6 +166,63 @@ def _verify_guard_engine() -> None:
             raise RuntimeError(f"guard engine drifted from live (non-engine.py): {rel}")
 
 
+def ensure_age_engine(force: bool = False) -> Path:
+    """Build engines/somaage = fresh live copy + age_tier.patch (derived, never hand-edited)."""
+    if AGE_ENGINE_DIR.exists():
+        if force:
+            shutil.rmtree(AGE_ENGINE_DIR)
+        else:
+            _verify_patched_engine(AGE_ENGINE_DIR, "age")
+            return AGE_ENGINE_DIR
+    if not AGE_PATCH.exists():
+        raise RuntimeError(f"age patch missing: {AGE_PATCH} "
+                           "(regenerate: python3 soma_bench/patches/gen_age_patch.py)")
+    AGE_ENGINE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        LIVE_SOMA_PLUGIN, AGE_ENGINE_DIR,
+        ignore=shutil.ignore_patterns(
+            "__pycache__", ".pytest_cache", "accounting.jsonl",
+            "bench_results", ".git", "*.pyc"),
+    )
+    _apply_patch_file(AGE_PATCH, AGE_ENGINE_DIR)
+    _verify_patched_engine(AGE_ENGINE_DIR, "age")
+    return AGE_ENGINE_DIR
+
+
+def _verify_patched_engine(engine_dir: Path, variant: str) -> None:
+    """A variant engine = pristine live files EXCEPT the patched engine.py."""
+    import filecmp
+    for live_file in LIVE_SOMA_PLUGIN.rglob("*"):
+        if live_file.is_dir():
+            continue
+        rel = live_file.relative_to(LIVE_SOMA_PLUGIN)
+        if any(p in {"__pycache__", ".pytest_cache", ".git", "bench_results"} for p in rel.parts):
+            continue
+        if rel.name == "accounting.jsonl":
+            continue
+        vfile = engine_dir / rel
+        if not vfile.exists():
+            raise RuntimeError(f"{variant} engine missing file: {rel}")
+        if rel.name == "engine.py":
+            if filecmp.cmp(live_file, vfile, shallow=False):
+                raise RuntimeError(f"{variant} engine.py is IDENTICAL to live — patch not applied")
+            continue
+        if not filecmp.cmp(live_file, vfile, shallow=False):
+            raise RuntimeError(f"{variant} engine drifted from live (non-engine.py): {rel}")
+
+
+def ensure_age_symlink() -> Path:
+    """Install-tree symlink 'somaage' -> engines/somaage (mirror of somabench)."""
+    if AGE_ENGINE_SYMLINK.is_symlink():
+        if Path(os.readlink(AGE_ENGINE_SYMLINK)).resolve() == AGE_ENGINE_DIR.resolve():
+            return AGE_ENGINE_SYMLINK
+        AGE_ENGINE_SYMLINK.unlink()
+    elif AGE_ENGINE_SYMLINK.exists():
+        raise RuntimeError(f"{AGE_ENGINE_SYMLINK} exists and is NOT a symlink — refusing.")
+    AGE_ENGINE_SYMLINK.symlink_to(AGE_ENGINE_DIR)
+    return AGE_ENGINE_SYMLINK
+
+
 def ensure_guard_symlink() -> Path:
     """Install-tree symlink 'somaguard' -> engines/somaguard (mirror of somabench)."""
     if GUARD_ENGINE_SYMLINK.is_symlink():
@@ -203,7 +267,7 @@ terminal:
   timeout: 600
 compression:
   enabled: true
-  threshold: 0.5
+  threshold: 0.85
   protect_last_n: 20
   min_tail_user_messages: 1
 context:
@@ -323,14 +387,19 @@ def setup_bench(force: bool = False) -> dict:
     ensure_install_symlink()
     ensure_guard_engine(force=force)
     ensure_guard_symlink()
+    ensure_age_engine(force=force)
+    ensure_age_symlink()
     setup_arm(ARM_SOMA, force=force)
     setup_arm(ARM_BASELINE, force=force)
     setup_arm(ARM_SOMA_GUARD, force=force)
+    setup_arm(ARM_SOMA_AGE, force=force)
     return {
         "engine_copy": str(BENCH_ENGINE_DIR),
         "install_symlink": str(BENCH_ENGINE_SYMLINK),
         "guard_engine": str(GUARD_ENGINE_DIR),
         "guard_symlink": str(GUARD_ENGINE_SYMLINK),
+        "age_engine": str(AGE_ENGINE_DIR),
+        "age_symlink": str(AGE_ENGINE_SYMLINK),
         "arms": {a: str(arm_home(a)) for a in ALL_ARMS},
         "model_lift": lift_live_config(),
     }
@@ -342,10 +411,14 @@ def verify_bench() -> dict:
     link = BENCH_ENGINE_SYMLINK
     if not link.is_symlink() or Path(os.readlink(link)).resolve() != BENCH_ENGINE_DIR.resolve():
         raise RuntimeError("install-tree 'somabench' symlink missing/mispointed")
-    _verify_guard_engine()
+    _verify_patched_engine(GUARD_ENGINE_DIR, "guard")
     glink = GUARD_ENGINE_SYMLINK
     if not glink.is_symlink() or Path(os.readlink(glink)).resolve() != GUARD_ENGINE_DIR.resolve():
         raise RuntimeError("install-tree 'somaguard' symlink missing/mispointed")
+    _verify_patched_engine(AGE_ENGINE_DIR, "age")
+    alink = AGE_ENGINE_SYMLINK
+    if not alink.is_symlink() or Path(os.readlink(alink)).resolve() != AGE_ENGINE_DIR.resolve():
+        raise RuntimeError("install-tree 'somaage' symlink missing/mispointed")
     for arm in ALL_ARMS:
         _verify_arm(arm_home(arm), arm)
     return {"ok": True}

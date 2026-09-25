@@ -1,0 +1,80 @@
+--- engine.py
++++ engine.py
+@@ -48,6 +48,23 @@
+ LARGE_UPPER_CHARS = 53_300
+ LARGE_CAP_CHARS = 24_000
+ 
++# Marginal-rewrite guard (bench-proposed, 2026-09-25). A rewrite is committed
++# only when it saves at least MIN_RELATIVE_SAVINGS of the input text. Live-
++# accounting evidence: 34% of rewrites kept >=95% of input (worst: 232,346 ->
++# 232,316 chars); 20% saved <1% of input (0.5% of total value). Each committed
++# rewrite invalidates the prompt-cache prefix from that message onward, so a
++# 30-char saving converts ~58K cached tokens (0.1x) to fresh (1.0x) — a loss
++# under any session timing. Guard projection: skips 24% of rewrites, forfeits
++# 1.0% of est-token value. Skipped rewrites leave the message byte-identical
++# (cache prefix preserved, same as passthrough).
++# 0.0 = disabled (live-plugin behavior).
++MIN_RELATIVE_SAVINGS = 0.02
++
++# Accounting reasons are distinct so guarded vs unguarded runs read cleanly:
++#   near_passthrough  - rewrite committed (live behavior)
++#   marginal_skipped  - extraction produced <MIN_RELATIVE_SAVINGS; NOT committed
++MARGINAL_SKIP_REASON = "marginal_skipped"
++
+ 
+ # -- Task 4: overflow gate + minimal fallback --------------------------------
+ # should_compress() only fires on provider-PROVEN overflow: the provider's own
+@@ -369,12 +386,27 @@
+         soma = _load_soma()
+         out_changed = False
+         results_capped = 0
++        marginal_skips = 0
+         out: List[Dict[str, Any]] = []
+         for message in request_messages:
+             capped, changed = _cap_openai_tool_result(soma, message)
++            if changed is None:  # marginal-skip sentinel from the guard
++                marginal_skips += 1
++                changed = False
+             out.append(capped)
+             results_capped += 1 if changed else 0
+             out_changed = out_changed or changed
++        if marginal_skips and not out_changed:
++            # Nothing committed this request, but skips happened: record them
++            # so guarded runs are visible in accounting (out == in chars).
++            _append_accounting_record(
++                _est_chars(request_messages),
++                _est_chars(request_messages),
++                0,
++                MARGINAL_SKIP_REASON,
++                self._session_id,
++            )
++            return None
+         if not out_changed:
+             return None
+         # Orphan guard (SOMA invariant): if rewriting would orphan tool_calls
+@@ -441,6 +473,13 @@
+             compressed, changed = soma.extractive_compress(inner_text, target, frozenset())
+             wrapped = soma.cmp_block(compressed)
+             if changed and len(wrapped) < len(inner_text):
++                saved = len(inner_text) - len(wrapped)
++                if saved < len(inner_text) * MIN_RELATIVE_SAVINGS:
++                    # Marginal-rewrite guard: saving <2% of input is never worth
++                    # the prompt-cache prefix break it causes. Leave the message
++                    # byte-identical (None sentinel marks the skip for the
++                    # request-level skip counter).
++                    return message, None
+                 envelope_obj[text_key] = wrapped
+                 out = dict(message)
+                 out["content"] = json.dumps(envelope_obj, ensure_ascii=False)
+@@ -451,6 +490,11 @@
+     capped, changed = soma.cap_tool_result(bridged, soma.REPORTED_RESULT_CAP)
+     if not changed:
+         return message, False
++    # Guard the non-envelope path with the same relative-savings rule.
++    new_len = len(str(capped.get("content") or ""))
++    old_len = len(str(bridged.get("content") or ""))
++    if new_len < old_len and (old_len - new_len) < old_len * MIN_RELATIVE_SAVINGS:
++        return message, None
+     out = dict(capped)
+     out["role"] = "tool"
+     return out, True

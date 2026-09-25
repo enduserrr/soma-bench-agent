@@ -208,7 +208,7 @@ def cmd_score(args):
     # ---- token & char comparison (billing truth) ----
     per_task = {}
     for row in rows:
-        per_task.setdefault(row["task"], {"soma": [], "baseline": []})
+        per_task.setdefault(row["task"], {a: [] for a in ARMS})
         arm = row["arm"]
         if arm in per_task[row["task"]]:
             per_task[row["task"]][arm].append(row)
@@ -219,58 +219,83 @@ def cmd_score(args):
         for arm in ARMS:
             rs = by_arm.get(arm, [])
             entry[arm] = _arm_agg(rs)
-        entry["delta"] = _delta(entry)
+        entry["delta"] = _delta(entry)  # soma vs baseline
+        if by_arm.get(ARM_SOMA_GUARD) and by_arm.get(ARM_SOMA):
+            entry["delta_guard_vs_soma"] = _delta(
+                {ARM_SOMA: entry[ARM_SOMA_GUARD], ARM_BASELINE: entry[ARM_SOMA]},
+                soma_key=ARM_SOMA)
         token_table.append(entry)
     summary["per_task"] = token_table
 
     # ---- Dendrite scoring ----
-    # baseline = no-SOMA arm; miner = SOMA arm.
-    # x = resolved baseline runs; y = resolved SOMA runs; n = total runs per side.
+    # baseline = no-SOMA arm; miner = the SOMA arm(s). Score each SOMA variant
+    # separately against the shared baseline so guard vs current compare cleanly.
     task_rows = []
+    task_rows_guard = []
     for task_name, by_arm in sorted(per_task.items()):
         base = by_arm.get(ARM_BASELINE, [])
-        soma = by_arm.get(ARM_SOMA, [])
-        x = sum(1 for r in base if r["resolved"])
-        y = sum(1 for r in soma if r["resolved"])
-        n = max(len(base), len(soma))
-        T_B = _avg_weighted(base)
-        T_A = _avg_weighted(soma)
-        scored = scoring.compute_swe_task_score(x, y, n, T_B, T_A)
-        scored.update({
-            "task": task_name, "x": x, "y": y, "n": n,
-            "T_B": T_B, "T_A": T_A,
-            "baseline_weighted_tokens": T_B, "miner_weighted_tokens": T_A,
-        })
-        task_rows.append(scored)
-    summary["dendrite_scoring"] = {
-        "weights": {"input": scoring.WEIGHT_INPUT, "cached": scoring.WEIGHT_CACHED,
-                    "output": scoring.WEIGHT_OUTPUT},
-        "per_task": task_rows,
-        "aggregates": scoring.build_swe_miner_scores(task_rows),
-    }
-    agg = summary["dendrite_scoring"]["aggregates"]
-    summary["dendrite_scoring"]["final_normalized_score"] = \
-        scoring.build_swe_miner_total_score(agg["raw_total"])
+        n_base = len(base)
+        for miner_arm, out_rows in ((ARM_SOMA, task_rows), (ARM_SOMA_GUARD, task_rows_guard)):
+            miner = by_arm.get(miner_arm, [])
+            if not miner and not base:
+                continue
+            x = sum(1 for r in base if r["resolved"])
+            y = sum(1 for r in miner if r["resolved"])
+            n = max(n_base, len(miner))
+            T_B = _avg_weighted(base)
+            T_A = _avg_weighted(miner)
+            scored = scoring.compute_swe_task_score(x, y, n, T_B, T_A)
+            scored.update({
+                "task": task_name, "x": x, "y": y, "n": n,
+                "T_B": T_B, "T_A": T_A, "miner_arm": miner_arm,
+                "baseline_weighted_tokens": T_B, "miner_weighted_tokens": T_A,
+            })
+            out_rows.append(scored)
+    def _score_block(rows):
+        return {
+            "weights": {"input": scoring.WEIGHT_INPUT, "cached": scoring.WEIGHT_CACHED,
+                        "output": scoring.WEIGHT_OUTPUT},
+            "per_task": rows,
+            "aggregates": scoring.build_swe_miner_scores(rows),
+            "final_normalized_score": scoring.build_swe_miner_total_score(
+                scoring.build_swe_miner_scores(rows)["raw_total"]),
+        }
+    summary["dendrite_scoring"] = _score_block(task_rows)
+    if task_rows_guard:
+        summary["dendrite_scoring_guard"] = _score_block(task_rows_guard)
 
-    # SOMA engine accounting (from the bench engine copy — never the live plugin)
-    soma_acct = []
-    acct_path = arm_setup.BENCH_ENGINE_DIR / "accounting.jsonl"
-    if acct_path.exists():
-        for line in acct_path.read_text().splitlines():
-            if line.strip():
-                try:
-                    rec = json.loads(line)
-                    soma_acct.append(rec)
-                except json.JSONDecodeError:
-                    pass
-    summary["soma_engine_accounting"] = {
-        "records": len(soma_acct),
-        "total_input_est_chars": sum(r.get("input_est_chars", 0) for r in soma_acct),
-        "total_output_est_chars": sum(r.get("output_est_chars", 0) for r in soma_acct),
-        "total_est_tokens_saved": sum(
-            r.get("input_est_tokens", 0) - r.get("output_est_tokens", 0) for r in soma_acct),
-        "by_session": _group_sessions(soma_acct),
-    }
+    # SOMA engine accounting (bench copies only — never the live plugin)
+    def _load_acct(engine_dir):
+        recs = []
+        acct_path = engine_dir / "accounting.jsonl"
+        if acct_path.exists():
+            for line in acct_path.read_text().splitlines():
+                if line.strip():
+                    try:
+                        recs.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        return recs
+
+    def _acct_block(recs):
+        return {
+            "records": len(recs),
+            "total_input_est_chars": sum(r.get("input_est_chars", 0) for r in recs),
+            "total_output_est_chars": sum(r.get("output_est_chars", 0) for r in recs),
+            "total_est_tokens_saved": sum(
+                r.get("input_est_tokens", 0) - r.get("output_est_tokens", 0) for r in recs),
+            "records_by_reason": {
+                reason: sum(1 for r in recs if r.get("reason") == reason)
+                for reason in sorted({r.get("reason", "?") for r in recs})
+            },
+            "by_session": _group_sessions(recs),
+        }
+
+    soma_acct = _load_acct(arm_setup.BENCH_ENGINE_DIR)
+    summary["soma_engine_accounting"] = _acct_block(soma_acct)
+    guard_acct = _load_acct(arm_setup.GUARD_ENGINE_DIR)
+    if guard_acct:
+        summary["guard_engine_accounting"] = _acct_block(guard_acct)
 
     save_json(tag_dir / "summary.json", summary)
     print(f"scored -> {tag_dir / 'summary.json'}")
@@ -324,8 +349,8 @@ def _avg_weighted(rows: list) -> float | None:
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
-def _delta(entry: dict) -> dict:
-    s, b = entry.get(ARM_SOMA), entry.get(ARM_BASELINE)
+def _delta(entry: dict, soma_key: str = ARM_SOMA) -> dict:
+    s, b = entry.get(soma_key), entry.get(ARM_BASELINE)
     if not s or not b:
         return {}
     def pct(a, b):
@@ -363,9 +388,16 @@ def _print_summary(s):
         if d:
             print(f"{'':24} {'DELTA':8} wt {d['weighted_tokens_pct']}% chars {d['chars_pct']}% "
                   f"resolved {d['resolved_delta']:+d}")
-    ds = s.get("dendrite_scoring", {})
-    if ds:
-        print(f"\n-- Dendrite SWE scoring (baseline=no-SOMA, miner=SOMA) --")
+        dg = e.get("delta_guard_vs_soma")
+        if dg:
+            print(f"{'':24} {'G-S':8} wt {dg['weighted_tokens_pct']}% chars {dg['chars_pct']}% "
+                  f"resolved {dg['resolved_delta']:+d}  (guard vs current soma)")
+    for key, label in (("dendrite_scoring", "miner=SOMA (current)"),
+                       ("dendrite_scoring_guard", "miner=SOMA-GUARD (patched)")):
+        ds = s.get(key)
+        if not ds:
+            continue
+        print(f"\n-- Dendrite SWE scoring (baseline=no-SOMA, {label}) --")
         for t in ds.get("per_task", []):
             det = t.get("detail", {})
             print(f"  {t['task'][:24]:24} x={t['x']} y={t['y']} n={t['n']} r={det.get('r', 0):.3f} "
@@ -374,10 +406,14 @@ def _print_summary(s):
         print(f"  main={agg.get('main_score'):.3f} hard_boost={agg.get('hard_boost'):.3f} "
               f"raw={agg.get('raw_total'):.3f} "
               f"final_normalized={ds.get('final_normalized_score'):.3f}")
-    se = s.get("soma_engine_accounting", {})
-    if se:
-        print(f"\n-- SOMA engine accounting (bench copy) --")
-        print(f"  records={se['records']} est_tokens_saved={se['total_est_tokens_saved']}")
+    for key, label in (("soma_engine_accounting", "SOMA engine (bench copy)"),
+                       ("guard_engine_accounting", "GUARD engine (bench copy)")):
+        se = s.get(key)
+        if not se:
+            continue
+        print(f"\n-- {label} --")
+        print(f"  records={se['records']} est_tokens_saved={se['total_est_tokens_saved']}"
+              f" by_reason={se.get('records_by_reason', {})}")
     print()
 
 

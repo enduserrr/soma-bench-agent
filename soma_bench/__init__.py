@@ -29,7 +29,8 @@ INSTALL_ENGINES = INSTALL_TREE / "plugins" / "context_engine"
 
 ARM_SOMA = "soma"
 ARM_BASELINE = "baseline"
-ARMS = (ARM_SOMA, ARM_BASELINE)
+ARM_SOMA_GUARD = "soma-guard"
+ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD)
 
 # Install-tree symlink that points at the bench's ENGINE COPY (never the live plugin).
 BENCH_ENGINE_SYMLINK = INSTALL_ENGINES / "somabench"

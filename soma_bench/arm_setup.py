@@ -21,7 +21,27 @@ from pathlib import Path
 from . import (BENCH_ENGINE_DIR, BENCH_ENGINE_SYMLINK, LIVE_CONFIG,
                LIVE_SOMA_PLUGIN, PROFILES_DIR, ARM_BASELINE, ARM_SOMA)
 
-ARM_ENGINE = {ARM_SOMA: "somabench", ARM_BASELINE: "compressor"}
+# Guard variant: 'soma-guard' arm = live copy + patches/marginal_guard.patch.
+ARM_SOMA_GUARD = "soma-guard"
+GUARD_ENGINE_DIRNAME = "somaguard"
+PATCHES_DIR = Path(__file__).resolve().parent / "patches"
+GUARD_PATCH = PATCHES_DIR / "marginal_guard.patch"
+GUARD_ENGINE_DIR = BENCH_ENGINE_DIR.parent / GUARD_ENGINE_DIRNAME
+GUARD_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / GUARD_ENGINE_DIRNAME
+
+ARM_ENGINE = {ARM_SOMA: "somabench", ARM_BASELINE: "compressor",
+              ARM_SOMA_GUARD: GUARD_ENGINE_DIRNAME}
+
+ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD)
+
+
+def _apply_patch_file(patch: Path, target_dir: Path) -> None:
+    """Apply a unified diff inside target_dir via `patch` (POSIX)."""
+    import subprocess
+    proc = subprocess.run(["patch", "-p0", "--batch", "-i", str(patch)],
+                          cwd=str(target_dir), capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"guard patch failed to apply: {proc.stdout}\n{proc.stderr}")
 
 
 def ensure_engine_copy(force: bool = False) -> Path:
@@ -90,10 +110,73 @@ def ensure_install_symlink() -> Path:
     return BENCH_ENGINE_SYMLINK
 
 
+def ensure_guard_engine(force: bool = False) -> Path:
+    """Build engines/somaguard = fresh live copy + marginal_guard.patch.
+
+    The guard variant is derived, never hand-edited: recreate = recopy live +
+    reapply patch. Fails loudly if the patch no longer applies (live engine
+    drifted) — that is a signal to regenerate the patch, not to force.
+    """
+    if GUARD_ENGINE_DIR.exists():
+        if force:
+            shutil.rmtree(GUARD_ENGINE_DIR)
+        else:
+            _verify_guard_engine()
+            return GUARD_ENGINE_DIR
+    if not GUARD_PATCH.exists():
+        raise RuntimeError(f"guard patch missing: {GUARD_PATCH}")
+    GUARD_ENGINE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        LIVE_SOMA_PLUGIN, GUARD_ENGINE_DIR,
+        ignore=shutil.ignore_patterns(
+            "__pycache__", ".pytest_cache", "accounting.jsonl",
+            "bench_results", ".git", "*.pyc"),
+    )
+    _apply_patch_file(GUARD_PATCH, GUARD_ENGINE_DIR)
+    _verify_guard_engine()
+    return GUARD_ENGINE_DIR
+
+
+def _verify_guard_engine() -> None:
+    """The guard engine = pristine live files EXCEPT the patched engine.py."""
+    import filecmp
+    for live_file in LIVE_SOMA_PLUGIN.rglob("*"):
+        if live_file.is_dir():
+            continue
+        rel = live_file.relative_to(LIVE_SOMA_PLUGIN)
+        if any(p in {"__pycache__", ".pytest_cache", ".git", "bench_results"} for p in rel.parts):
+            continue
+        if rel.name == "accounting.jsonl":
+            continue
+        guard_file = GUARD_ENGINE_DIR / rel
+        if not guard_file.exists():
+            raise RuntimeError(f"guard engine missing file: {rel}")
+        if rel.name == "engine.py":
+            if filecmp.cmp(live_file, guard_file, shallow=False):
+                raise RuntimeError("guard engine.py is IDENTICAL to live — patch not applied")
+            continue
+        if not filecmp.cmp(live_file, guard_file, shallow=False):
+            raise RuntimeError(f"guard engine drifted from live (non-engine.py): {rel}")
+
+
+def ensure_guard_symlink() -> Path:
+    """Install-tree symlink 'somaguard' -> engines/somaguard (mirror of somabench)."""
+    if GUARD_ENGINE_SYMLINK.is_symlink():
+        if Path(os.readlink(GUARD_ENGINE_SYMLINK)).resolve() == GUARD_ENGINE_DIR.resolve():
+            return GUARD_ENGINE_SYMLINK
+        GUARD_ENGINE_SYMLINK.unlink()
+    elif GUARD_ENGINE_SYMLINK.exists():
+        raise RuntimeError(f"{GUARD_ENGINE_SYMLINK} exists and is NOT a symlink — refusing.")
+    GUARD_ENGINE_SYMLINK.symlink_to(GUARD_ENGINE_DIR)
+    return GUARD_ENGINE_SYMLINK
+
+
 def remove_install_symlink() -> None:
-    """Idempotent teardown of the bench symlink (never touches the live 'soma' link)."""
+    """Idempotent teardown of the bench symlinks (never touches live 'soma')."""
     if BENCH_ENGINE_SYMLINK.is_symlink():
         BENCH_ENGINE_SYMLINK.unlink()
+    if GUARD_ENGINE_SYMLINK.is_symlink():
+        GUARD_ENGINE_SYMLINK.unlink()
 
 
 _ARM_CONFIG_TEMPLATE = """\
@@ -235,15 +318,20 @@ def _verify_arm(home: Path, arm: str) -> None:
 
 
 def setup_bench(force: bool = False) -> dict:
-    """Full bench setup: engine copy + install symlink + both arm homes."""
+    """Full bench setup: engine copies + install symlinks + all arm homes."""
     ensure_engine_copy(force=force)
     ensure_install_symlink()
+    ensure_guard_engine(force=force)
+    ensure_guard_symlink()
     setup_arm(ARM_SOMA, force=force)
     setup_arm(ARM_BASELINE, force=force)
+    setup_arm(ARM_SOMA_GUARD, force=force)
     return {
         "engine_copy": str(BENCH_ENGINE_DIR),
         "install_symlink": str(BENCH_ENGINE_SYMLINK),
-        "arms": {a: str(arm_home(a)) for a in (ARM_SOMA, ARM_BASELINE)},
+        "guard_engine": str(GUARD_ENGINE_DIR),
+        "guard_symlink": str(GUARD_ENGINE_SYMLINK),
+        "arms": {a: str(arm_home(a)) for a in ALL_ARMS},
         "model_lift": lift_live_config(),
     }
 
@@ -254,6 +342,10 @@ def verify_bench() -> dict:
     link = BENCH_ENGINE_SYMLINK
     if not link.is_symlink() or Path(os.readlink(link)).resolve() != BENCH_ENGINE_DIR.resolve():
         raise RuntimeError("install-tree 'somabench' symlink missing/mispointed")
-    for arm in (ARM_SOMA, ARM_BASELINE):
+    _verify_guard_engine()
+    glink = GUARD_ENGINE_SYMLINK
+    if not glink.is_symlink() or Path(os.readlink(glink)).resolve() != GUARD_ENGINE_DIR.resolve():
+        raise RuntimeError("install-tree 'somaguard' symlink missing/mispointed")
+    for arm in ALL_ARMS:
         _verify_arm(arm_home(arm), arm)
     return {"ok": True}

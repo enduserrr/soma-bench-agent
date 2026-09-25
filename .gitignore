@@ -1,0 +1,12 @@
+# Scratch homes (recreated by setup)
+profiles/
+# SOMA engine copy (byte-verified copy of the live plugin, recreated by setup;
+# its accounting.jsonl is run data but the tree is a mirror, not source)
+engines/
+# Python
+__pycache__/
+*.pyc
+# Agent workdirs inside runs (large task workspaces; records/rows/summary are tracked)
+runs/*/*/*/work/
+# OS
+.DS_Store

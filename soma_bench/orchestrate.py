@@ -390,7 +390,7 @@ def _print_summary(s):
     for e in s.get("per_task", []):
         for arm in ARMS:
             a = e.get(arm)
-            if not a:
+            if not a or not a.get("runs"):
                 continue
             print(f"{e['task'][:24]:24} {arm:8} {a['resolved']:>4} {a['input_tokens_avg']:>9} "
                   f"{a['cache_read_tokens_avg']:>9} {a['output_tokens_avg']:>8} "

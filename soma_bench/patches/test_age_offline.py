@@ -124,14 +124,20 @@ reasons = [r.get("reason") for r in recs]
 print("   reasons:", reasons)
 assert "age_resqueeze" in reasons, "age_resqueeze reason not recorded"
 
-print("== 7. first-time cap at any age ==")
+print("== 7. first-time cap at any age (now AT CAP TIME: old raw -> band budget) ==")
 fresh = tool_msg(report_like(30))
 padded = [fresh] + [{"role": "user", "content": f"n{i}"} for i in range(60)]
 out = run_select(padded)
-assert out is not None and "[[CMP]]" in out[0]["content"], "fresh old result not birth-capped"
+print("   out is None?", out is None)
+if out is not None:
+    print("   out[0] role:", out[0].get("role"), "| len:", len(str(out[0].get("content", ""))))
+    print("   head:", repr(str(out[0].get("content", ""))[:80]))
+    for i, m in enumerate(out[:3]):
+        print(f"   out[{i}] role={m.get('role')} cmp={'[[CMP]]' in str(m.get('content',''))}")
+assert out is not None and "[[CMP]]" in out[0]["content"], "fresh old result not capped"
 c = out[0]["content"]
-assert len(c) <= 24_500, f"birth cap size {len(c)}"
-print(f"   ok: fresh 30K result at tail-60 birth-capped -> {len(c):,} chars")
+assert len(c) <= 6_800, f"old raw result should land at band-2 budget, got {len(c)}"
+print(f"   ok: fresh 30K result at tail-60 capped straight to band-2 -> {len(c):,} chars")
 
 print("== 8. envelope path (terminal-style) ==")
 env = envelope_msg(report_like(30))

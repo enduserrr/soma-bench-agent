@@ -47,6 +47,8 @@ AGE_TIER1_KEEP = 12_000
 AGE_TIER2_KEEP = 6_000
 AGE_HYSTERESIS = 1.10          # compress only if len > budget * 1.10
 AGE_RECORD_REASON = "age_resqueeze"
+CMP_PREFIX = "[[CMP]]\\n"      # bare compressed form prefix (matched literally)
+CMP_SUFFIX = "\\n[[/CMP]]"     # bare compressed form suffix (matched literally)
 
 
 def _age_budget(messages_from_tail: int):
@@ -81,14 +83,11 @@ IMPL_NEW = '''        soma = _load_soma()
         n = len(request_messages)
         for i, message in enumerate(request_messages):
             tail_distance = n - 1 - i
-            capped, changed = _cap_openai_tool_result_with_age(
+            capped, changed, age_tightened = _cap_openai_tool_result_with_age(
                 soma, message, tail_distance)
             out.append(capped)
             results_capped += 1 if changed else 0
-            was_old_cmp = isinstance(message, dict) and (
-                "cmp" in str(message.get("role") or "") or
-                "[[CMP]]" in str(message.get("content") or ""))
-            age_resqueezes += 1 if (changed and was_old_cmp) else 0
+            age_resqueezes += 1 if age_tightened else 0
             out_changed = out_changed or changed
         if not out_changed:
             return None'''
@@ -112,45 +111,71 @@ def _cap_openai_tool_result_with_age(soma: Any, message: Dict[str, Any],
                                      tail_distance: int) -> tuple:
     """Age-aware wrapper around _cap_openai_tool_result.
 
-    Band 0 (young or first-time cap): delegate untouched — behaviour
-    identical to today. Band 1/2 (old): if the message is an
-    already-[[CMP]] result whose compressed size still exceeds the tier
-    budget, re-squeeze it to that budget. Idempotent per band (fixed
-    point) with 10% hysteresis. Never-compressed messages are untouched by
-    the age path — first-time caps still happen at birth (any age).
+    Reality of the Hermes request flow: persisted history is RAW (compression
+    never mutates it), so every request re-derives from raw messages — an old
+    oversized result is birth-capped fresh each request. The age tier is
+    therefore applied AT CAP TIME: a result old enough for a tighter band is
+    capped directly to that band's budget instead of the 24K birth cap.
+    Young results (band 0) behave byte-identically to today.
+
+    Cache economics: a result's form is a pure function of (raw content,
+    band). When it crosses a band boundary (tail 19->20, 39->40) its form
+    changes once — one cache break per crossing, never continuous churn.
+    The explicit re-squeeze path (already-[[CMP]] input) is kept for
+    robustness but is not exercised by the standard Hermes flow.
     """
     capped, changed = _cap_openai_tool_result(soma, message)
-    if changed or not isinstance(capped, dict):
-        return capped, changed  # first-time cap (or non-result): today's path
-    content = capped.get("content")
-    if not isinstance(content, str) or "[[CMP]]" not in content:
-        return capped, changed
     budget = _age_budget(tail_distance)
     if budget is None:
-        return capped, changed
+        return capped, changed, False  # band 0: today's behaviour exactly
+    if not changed:
+        # not birth-capped now; only an already-compressed old result could
+        # still be too big for its band (non-standard flow) — re-squeeze
+        content = capped.get("content") if isinstance(capped, dict) else None
+        if not isinstance(content, str) or "[[CMP]]" not in content:
+            return capped, changed, False
+        retext = _age_resqueeze_text(soma, content, budget)
+        if retext is None or len(retext) >= len(content):
+            return capped, changed, False
+        out = dict(capped)
+        out["content"] = retext
+        return out, True, True
+    # birth cap happened; tighten it to the age budget when the result is old
+    content = capped.get("content")
+    if not isinstance(content, str) or "[[CMP]]" not in content:
+        return capped, changed, False
     retext = _age_resqueeze_text(soma, content, budget)
     if retext is None or len(retext) >= len(content):
-        return capped, changed  # no shrink (or JSON-escape overhead ate it)
+        return capped, changed, False  # could not tighten further; keep birth cap
     out = dict(capped)
     out["content"] = retext
-    return out, True
+    return out, True, True
 
 
 def _age_resqueeze_text(soma: Any, content: str, budget: int):
-    """Re-squeeze an already-[[CMP]] tool result to `budget` chars.
+    """Squeeze a [[CMP]] tool result (bare or JSON-envelope) to `budget` chars.
 
     Returns None when nothing should change (within budget / hysteresis /
-    no shrink). Works on bare [[CMP]] content and Hermes JSON-envelope
-    content; envelope metadata is preserved on re-wrap.
+    no shrink). Envelope metadata is preserved on re-wrap.
     """
     unwrapped = _unwrap_json_envelope(content)
     if unwrapped is None:
         if len(content) <= budget * AGE_HYSTERESIS:
             return None
-        new_text, _changed = soma.extractive_compress(content, budget, frozenset())
-        if not _changed or len(new_text) >= len(content):
+        # bare [[CMP]] content: strip the marker, squeeze the inner text,
+        # re-wrap — the compressed form must keep its [[CMP]] marker (the
+        # marker line itself is not "pinned", so squeezing the raw content
+        # would drop it).
+        inner = content
+        had_marker = content.startswith(CMP_PREFIX)
+        if had_marker:
+            inner = content[len(CMP_PREFIX):]
+            if inner.endswith(CMP_SUFFIX):
+                inner = inner[: -len(CMP_SUFFIX)]
+        new_inner, _changed = soma.extractive_compress(inner, budget, frozenset())
+        if not _changed or len(new_inner) >= len(content):
             return None
-        return new_text
+        return soma.cmp_block(new_inner) if had_marker else new_inner
     inner_text, envelope_obj, text_key = unwrapped
     if len(inner_text) <= budget * AGE_HYSTERESIS:
         return None

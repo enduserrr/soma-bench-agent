@@ -20,26 +20,32 @@ from pathlib import Path
 
 from . import (BENCH_ENGINE_DIR, BENCH_ENGINE_SYMLINK, LIVE_CONFIG,
                LIVE_SOMA_PLUGIN, PROFILES_DIR, ARM_BASELINE, ARM_SOMA,
-               ARM_SOMA_AGE)
+               ARM_SOMA_AGE, ARM_SOMA_TOK)
 
 # Guard variant: 'soma-guard' arm = live copy + patches/marginal_guard.patch.
 ARM_SOMA_GUARD = "soma-guard"
 GUARD_ENGINE_DIRNAME = "somaguard"
 # Age variant: 'soma-age' arm = live copy + patches/age_tier.patch.
 AGE_ENGINE_DIRNAME = "somaage"
+# Token-ladder variant: 'soma-tok' arm = live copy + patches/token_ladder.patch.
+TOK_ENGINE_DIRNAME = "somatok"
 PATCHES_DIR = Path(__file__).resolve().parent / "patches"
 GUARD_PATCH = PATCHES_DIR / "marginal_guard.patch"
 AGE_PATCH = PATCHES_DIR / "age_tier.patch"
+TOK_PATCH = PATCHES_DIR / "token_ladder.patch"
 GUARD_ENGINE_DIR = BENCH_ENGINE_DIR.parent / GUARD_ENGINE_DIRNAME
 GUARD_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / GUARD_ENGINE_DIRNAME
 AGE_ENGINE_DIR = BENCH_ENGINE_DIR.parent / AGE_ENGINE_DIRNAME
 AGE_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / AGE_ENGINE_DIRNAME
+TOK_ENGINE_DIR = BENCH_ENGINE_DIR.parent / TOK_ENGINE_DIRNAME
+TOK_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / TOK_ENGINE_DIRNAME
 
 ARM_ENGINE = {ARM_SOMA: "somabench", ARM_BASELINE: "compressor",
               ARM_SOMA_GUARD: GUARD_ENGINE_DIRNAME,
-              ARM_SOMA_AGE: AGE_ENGINE_DIRNAME}
+              ARM_SOMA_AGE: AGE_ENGINE_DIRNAME,
+              ARM_SOMA_TOK: TOK_ENGINE_DIRNAME}
 
-ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE)
+ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE, ARM_SOMA_TOK)
 
 
 def _apply_patch_file(patch: Path, target_dir: Path) -> None:
@@ -223,6 +229,41 @@ def ensure_age_symlink() -> Path:
     return AGE_ENGINE_SYMLINK
 
 
+def ensure_tok_engine(force: bool = False) -> Path:
+    """Build engines/somatok = fresh live copy + token_ladder.patch (derived, never hand-edited)."""
+    if TOK_ENGINE_DIR.exists():
+        if force:
+            shutil.rmtree(TOK_ENGINE_DIR)
+        else:
+            _verify_patched_engine(TOK_ENGINE_DIR, "tok")
+            return TOK_ENGINE_DIR
+    if not TOK_PATCH.exists():
+        raise RuntimeError(f"token ladder patch missing: {TOK_PATCH} "
+                           "(regenerate: python3 soma_bench/patches/gen_token_ladder_patch.py)")
+    TOK_ENGINE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        LIVE_SOMA_PLUGIN, TOK_ENGINE_DIR,
+        ignore=shutil.ignore_patterns(
+            "__pycache__", ".pytest_cache", "accounting.jsonl",
+            "bench_results", ".git", "*.pyc"),
+    )
+    _apply_patch_file(TOK_PATCH, TOK_ENGINE_DIR)
+    _verify_patched_engine(TOK_ENGINE_DIR, "tok")
+    return TOK_ENGINE_DIR
+
+
+def ensure_tok_symlink() -> Path:
+    """Install-tree symlink 'somatok' -> engines/somatok (mirror of somabench)."""
+    if TOK_ENGINE_SYMLINK.is_symlink():
+        if Path(os.readlink(TOK_ENGINE_SYMLINK)).resolve() == TOK_ENGINE_DIR.resolve():
+            return TOK_ENGINE_SYMLINK
+        TOK_ENGINE_SYMLINK.unlink()
+    elif TOK_ENGINE_SYMLINK.exists():
+        raise RuntimeError(f"{TOK_ENGINE_SYMLINK} exists and is NOT a symlink — refusing.")
+    TOK_ENGINE_SYMLINK.symlink_to(TOK_ENGINE_DIR)
+    return TOK_ENGINE_SYMLINK
+
+
 def ensure_guard_symlink() -> Path:
     """Install-tree symlink 'somaguard' -> engines/somaguard (mirror of somabench)."""
     if GUARD_ENGINE_SYMLINK.is_symlink():
@@ -389,10 +430,13 @@ def setup_bench(force: bool = False) -> dict:
     ensure_guard_symlink()
     ensure_age_engine(force=force)
     ensure_age_symlink()
+    ensure_tok_engine(force=force)
+    ensure_tok_symlink()
     setup_arm(ARM_SOMA, force=force)
     setup_arm(ARM_BASELINE, force=force)
     setup_arm(ARM_SOMA_GUARD, force=force)
     setup_arm(ARM_SOMA_AGE, force=force)
+    setup_arm(ARM_SOMA_TOK, force=force)
     return {
         "engine_copy": str(BENCH_ENGINE_DIR),
         "install_symlink": str(BENCH_ENGINE_SYMLINK),
@@ -400,6 +444,8 @@ def setup_bench(force: bool = False) -> dict:
         "guard_symlink": str(GUARD_ENGINE_SYMLINK),
         "age_engine": str(AGE_ENGINE_DIR),
         "age_symlink": str(AGE_ENGINE_SYMLINK),
+        "tok_engine": str(TOK_ENGINE_DIR),
+        "tok_symlink": str(TOK_ENGINE_SYMLINK),
         "arms": {a: str(arm_home(a)) for a in ALL_ARMS},
         "model_lift": lift_live_config(),
     }
@@ -419,6 +465,10 @@ def verify_bench() -> dict:
     alink = AGE_ENGINE_SYMLINK
     if not alink.is_symlink() or Path(os.readlink(alink)).resolve() != AGE_ENGINE_DIR.resolve():
         raise RuntimeError("install-tree 'somaage' symlink missing/mispointed")
+    _verify_patched_engine(TOK_ENGINE_DIR, "tok")
+    tlink = TOK_ENGINE_SYMLINK
+    if not tlink.is_symlink() or Path(os.readlink(tlink)).resolve() != TOK_ENGINE_DIR.resolve():
+        raise RuntimeError("install-tree 'somatok' symlink missing/mispointed")
     for arm in ALL_ARMS:
         _verify_arm(arm_home(arm), arm)
     return {"ok": True}

@@ -26,8 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_AGE, ARM_SOMA_GUARD, ARMS,
-               BENCH_ROOT, RUNS_DIR, TASKS_DIR, load_json, save_json, sh)
+from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_AGE, ARM_SOMA_GUARD, ARM_SOMA_TOK,
+               ARMS, BENCH_ROOT, RUNS_DIR, TASKS_DIR, load_json, save_json, sh)
 from . import scoring
 from . import arm_setup, runner, verify as verify_mod
 
@@ -228,6 +228,10 @@ def cmd_score(args):
             entry["delta_age_vs_soma"] = _delta(
                 {ARM_SOMA: entry[ARM_SOMA_AGE], ARM_BASELINE: entry[ARM_SOMA]},
                 soma_key=ARM_SOMA)
+        if by_arm.get(ARM_SOMA_TOK) and by_arm.get(ARM_SOMA):
+            entry["delta_tok_vs_soma"] = _delta(
+                {ARM_SOMA: entry[ARM_SOMA_TOK], ARM_BASELINE: entry[ARM_SOMA]},
+                soma_key=ARM_SOMA)
         token_table.append(entry)
     summary["per_task"] = token_table
 
@@ -237,11 +241,12 @@ def cmd_score(args):
     task_rows = []
     task_rows_guard = []
     task_rows_age = []
+    task_rows_tok = []
     for task_name, by_arm in sorted(per_task.items()):
         base = by_arm.get(ARM_BASELINE, [])
         n_base = len(base)
         for miner_arm, out_rows in ((ARM_SOMA, task_rows), (ARM_SOMA_GUARD, task_rows_guard),
-                                    (ARM_SOMA_AGE, task_rows_age)):
+                                    (ARM_SOMA_AGE, task_rows_age), (ARM_SOMA_TOK, task_rows_tok)):
             miner = by_arm.get(miner_arm, [])
             if not miner and not base:
                 continue
@@ -271,6 +276,8 @@ def cmd_score(args):
         summary["dendrite_scoring_guard"] = _score_block(task_rows_guard)
     if task_rows_age:
         summary["dendrite_scoring_age"] = _score_block(task_rows_age)
+    if task_rows_tok:
+        summary["dendrite_scoring_tok"] = _score_block(task_rows_tok)
 
     # SOMA engine accounting (bench copies only — never the live plugin)
     def _load_acct(engine_dir):
@@ -307,6 +314,9 @@ def cmd_score(args):
     age_acct = _load_acct(arm_setup.AGE_ENGINE_DIR)
     if age_acct:
         summary["age_engine_accounting"] = _acct_block(age_acct)
+    tok_acct = _load_acct(arm_setup.TOK_ENGINE_DIR)
+    if tok_acct:
+        summary["tok_engine_accounting"] = _acct_block(tok_acct)
 
     save_json(tag_dir / "summary.json", summary)
     print(f"scored -> {tag_dir / 'summary.json'}")
@@ -407,9 +417,14 @@ def _print_summary(s):
         if da:
             print(f"{'':24} {'A-S':8} wt {da['weighted_tokens_pct']}% chars {da['chars_pct']}% "
                   f"resolved {da['resolved_delta']:+d}  (age vs current soma)")
+        dt = e.get("delta_tok_vs_soma")
+        if dt:
+            print(f"{'':24} {'T-S':8} wt {dt['weighted_tokens_pct']}% chars {dt['chars_pct']}% "
+                  f"resolved {dt['resolved_delta']:+d}  (token-ladder vs current soma)")
     for key, label in (("dendrite_scoring", "miner=SOMA (current)"),
                        ("dendrite_scoring_guard", "miner=SOMA-GUARD (patched)"),
-                       ("dendrite_scoring_age", "miner=SOMA-AGE (age-tiered)")):
+                       ("dendrite_scoring_age", "miner=SOMA-AGE (age-tiered)"),
+                       ("dendrite_scoring_tok", "miner=SOMA-TOK (token ladder)")):
         ds = s.get(key)
         if not ds:
             continue
@@ -424,7 +439,8 @@ def _print_summary(s):
               f"final_normalized={ds.get('final_normalized_score'):.3f}")
     for key, label in (("soma_engine_accounting", "SOMA engine (bench copy)"),
                        ("guard_engine_accounting", "GUARD engine (bench copy)"),
-                       ("age_engine_accounting", "AGE engine (bench copy)")):
+                       ("age_engine_accounting", "AGE engine (bench copy)"),
+                       ("tok_engine_accounting", "TOK engine (bench copy)")):
         se = s.get(key)
         if not se:
             continue

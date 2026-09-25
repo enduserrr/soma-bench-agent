@@ -145,6 +145,55 @@ def cmd_run(args):
     print(f"done in {run_meta['wall_s']}s -> {tag_dir}")
 
 
+def cmd_reverify(args):
+    """Re-run verification probes over stored run records — no API calls.
+
+    Use after changing probe semantics (e.g. needle trajectory-wide checks) or
+    task specs: verdicts update from the persisted records + arm state.db.
+    Rewrites rows.jsonl (from records, not append), then rescoring is required.
+    """
+    tag_dir = RUNS_DIR / args.tag
+    if not tag_dir.is_dir():
+        sys.exit(f"no such run: {args.tag}")
+    tasks_by_name = dict(_load_tasks(None))
+    changed = 0
+    new_rows = []
+    for task_dir in sorted(p for p in tag_dir.iterdir() if p.is_dir()):
+        task_name = task_dir.name
+        task = tasks_by_name.get(task_name)
+        if not task:
+            print(f"  {task_name}: no task spec found — skipped")
+            continue
+        for rec_path in sorted(task_dir.glob("*_r*/record.json")):
+            record = load_json(rec_path)
+            arm = record.get("arm")
+            if arm not in ARMS:
+                continue
+            arm_home = arm_setup.arm_home(arm)
+            verdict = verify_mod.verify_task(task, record, arm_home=arm_home)
+            if verdict["resolved"] != record.get("resolved"):
+                print(f"  {task_name}/{arm}/r{record.get('repeat')}: "
+                      f"{record.get('resolved')} -> {verdict['resolved']}")
+                changed += 1
+                record["resolved"] = verdict["resolved"]
+            record["checks"] = verdict["checks"]
+            save_json(rec_path, record)
+            new_rows.append({
+                "task": task_name, "arm": arm, "repeat": record.get("repeat"),
+                "resolved": record["resolved"], "session_id": record.get("session_id"),
+                "exit_code": record.get("exit_code"), "wall_s": record.get("wall_s"),
+                "usage": record.get("usage"), "chars": record.get("chars"),
+            })
+    if not new_rows:
+        sys.exit("no records found")
+    with open(tag_dir / "rows.jsonl", "w", encoding="utf-8") as fh:
+        for row in new_rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    print(f"reverified {len(new_rows)} records ({changed} verdict changes) -> rows.jsonl rewritten")
+    if changed:
+        print(f"re-run: python3 -m soma_bench.orchestrate score {args.tag}")
+
+
 def cmd_score(args):
     tag_dir = RUNS_DIR / args.tag
     if not tag_dir.is_dir():
@@ -358,6 +407,10 @@ def main(argv=None):
     p = sub.add_parser("score", help="score a run dir")
     p.add_argument("tag", help="run tag under runs/")
     p.set_defaults(fn=cmd_score)
+
+    p = sub.add_parser("reverify", help="re-run probes over stored records (no API calls)")
+    p.add_argument("tag", help="run tag under runs/")
+    p.set_defaults(fn=cmd_reverify)
 
     p = sub.add_parser("report", help="print an existing summary")
     p.add_argument("tag", help="run tag under runs/")

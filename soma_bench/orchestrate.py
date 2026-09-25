@@ -433,7 +433,8 @@ def main(argv=None):
 
     p = sub.add_parser("run", help="run tasks across arms")
     p.add_argument("-t", "--task", action="append", help="task name (repeatable); default all")
-    p.add_argument("--arms", default="soma,baseline")
+    p.add_argument("--arms", default="soma,baseline,soma-guard",
+                   help="comma-separated arms (soma, baseline, soma-guard)")
     p.add_argument("--repeats", type=int, default=0, help="0 = task default (1)")
     p.add_argument("--max-turns", type=int, default=0)
     p.add_argument("--timeout", type=int, default=1800, help="per-run seconds")

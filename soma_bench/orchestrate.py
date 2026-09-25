@@ -26,8 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (ARM_BASELINE, ARM_SOMA, ARMS, BENCH_ROOT, RUNS_DIR, TASKS_DIR,
-               load_json, save_json, sh)
+from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_GUARD, ARMS, BENCH_ROOT, RUNS_DIR,
+               TASKS_DIR, load_json, save_json, sh)
 from . import scoring
 from . import arm_setup, runner, verify as verify_mod
 

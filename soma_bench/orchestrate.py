@@ -26,8 +26,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_AGE, ARM_SOMA_GUARD, ARM_SOMA_TOK,
-               ARMS, BENCH_ROOT, RUNS_DIR, TASKS_DIR, load_json, save_json, sh)
+from . import (ARM_BASELINE, ARM_SOMA, ARM_SOMA_16K, ARM_SOMA_AGE, ARM_SOMA_GUARD,
+               ARM_SOMA_TOK, ARMS, BENCH_ROOT, RUNS_DIR, TASKS_DIR,
+               load_json, save_json, sh)
 from . import scoring
 from . import arm_setup, runner, verify as verify_mod
 
@@ -232,6 +233,10 @@ def cmd_score(args):
             entry["delta_tok_vs_soma"] = _delta(
                 {ARM_SOMA: entry[ARM_SOMA_TOK], ARM_BASELINE: entry[ARM_SOMA]},
                 soma_key=ARM_SOMA)
+        if by_arm.get(ARM_SOMA_16K) and by_arm.get(ARM_SOMA):
+            entry["delta_16k_vs_soma"] = _delta(
+                {ARM_SOMA: entry[ARM_SOMA_16K], ARM_BASELINE: entry[ARM_SOMA]},
+                soma_key=ARM_SOMA)
         token_table.append(entry)
     summary["per_task"] = token_table
 
@@ -242,11 +247,13 @@ def cmd_score(args):
     task_rows_guard = []
     task_rows_age = []
     task_rows_tok = []
+    task_rows_16k = []
     for task_name, by_arm in sorted(per_task.items()):
         base = by_arm.get(ARM_BASELINE, [])
         n_base = len(base)
         for miner_arm, out_rows in ((ARM_SOMA, task_rows), (ARM_SOMA_GUARD, task_rows_guard),
-                                    (ARM_SOMA_AGE, task_rows_age), (ARM_SOMA_TOK, task_rows_tok)):
+                                    (ARM_SOMA_AGE, task_rows_age), (ARM_SOMA_TOK, task_rows_tok),
+                                    (ARM_SOMA_16K, task_rows_16k)):
             miner = by_arm.get(miner_arm, [])
             if not miner and not base:
                 continue
@@ -278,6 +285,8 @@ def cmd_score(args):
         summary["dendrite_scoring_age"] = _score_block(task_rows_age)
     if task_rows_tok:
         summary["dendrite_scoring_tok"] = _score_block(task_rows_tok)
+    if task_rows_16k:
+        summary["dendrite_scoring_16k"] = _score_block(task_rows_16k)
 
     # SOMA engine accounting (bench copies only — never the live plugin)
     def _load_acct(engine_dir):
@@ -317,6 +326,9 @@ def cmd_score(args):
     tok_acct = _load_acct(arm_setup.TOK_ENGINE_DIR)
     if tok_acct:
         summary["tok_engine_accounting"] = _acct_block(tok_acct)
+    cap16k_acct = _load_acct(arm_setup.CAP16K_ENGINE_DIR)
+    if cap16k_acct:
+        summary["cap16k_engine_accounting"] = _acct_block(cap16k_acct)
 
     save_json(tag_dir / "summary.json", summary)
     print(f"scored -> {tag_dir / 'summary.json'}")
@@ -421,10 +433,15 @@ def _print_summary(s):
         if dt:
             print(f"{'':24} {'T-S':8} wt {dt['weighted_tokens_pct']}% chars {dt['chars_pct']}% "
                   f"resolved {dt['resolved_delta']:+d}  (token-ladder vs current soma)")
+        d16 = e.get("delta_16k_vs_soma")
+        if d16:
+            print(f"{'':24} {'16-S':8} wt {d16['weighted_tokens_pct']}% chars {d16['chars_pct']}% "
+                  f"resolved {d16['resolved_delta']:+d}  (16K cap vs current soma)")
     for key, label in (("dendrite_scoring", "miner=SOMA (current)"),
                        ("dendrite_scoring_guard", "miner=SOMA-GUARD (patched)"),
                        ("dendrite_scoring_age", "miner=SOMA-AGE (age-tiered)"),
-                       ("dendrite_scoring_tok", "miner=SOMA-TOK (token ladder)")):
+                       ("dendrite_scoring_tok", "miner=SOMA-TOK (token ladder)"),
+                       ("dendrite_scoring_16k", "miner=SOMA-16K (16K cap)")):
         ds = s.get(key)
         if not ds:
             continue
@@ -440,7 +457,8 @@ def _print_summary(s):
     for key, label in (("soma_engine_accounting", "SOMA engine (bench copy)"),
                        ("guard_engine_accounting", "GUARD engine (bench copy)"),
                        ("age_engine_accounting", "AGE engine (bench copy)"),
-                       ("tok_engine_accounting", "TOK engine (bench copy)")):
+                       ("tok_engine_accounting", "TOK engine (bench copy)"),
+                       ("cap16k_engine_accounting", "16K engine (bench copy)")):
         se = s.get(key)
         if not se:
             continue

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import (BENCH_ENGINE_DIR, BENCH_ENGINE_SYMLINK, LIVE_CONFIG,
                LIVE_SOMA_PLUGIN, PROFILES_DIR, ARM_BASELINE, ARM_SOMA,
-               ARM_SOMA_AGE, ARM_SOMA_TOK)
+               ARM_SOMA_AGE, ARM_SOMA_TOK, ARM_SOMA_16K)
 
 # Guard variant: 'soma-guard' arm = live copy + patches/marginal_guard.patch.
 ARM_SOMA_GUARD = "soma-guard"
@@ -29,23 +29,29 @@ GUARD_ENGINE_DIRNAME = "somaguard"
 AGE_ENGINE_DIRNAME = "somaage"
 # Token-ladder variant: 'soma-tok' arm = live copy + patches/token_ladder.patch.
 TOK_ENGINE_DIRNAME = "somatok"
+# Cap-16K variant: 'soma-16k' arm = live copy + patches/cap16k.patch.
+CAP16K_ENGINE_DIRNAME = "soma16k"
 PATCHES_DIR = Path(__file__).resolve().parent / "patches"
 GUARD_PATCH = PATCHES_DIR / "marginal_guard.patch"
 AGE_PATCH = PATCHES_DIR / "age_tier.patch"
 TOK_PATCH = PATCHES_DIR / "token_ladder.patch"
+CAP16K_PATCH = PATCHES_DIR / "cap16k.patch"
 GUARD_ENGINE_DIR = BENCH_ENGINE_DIR.parent / GUARD_ENGINE_DIRNAME
 GUARD_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / GUARD_ENGINE_DIRNAME
 AGE_ENGINE_DIR = BENCH_ENGINE_DIR.parent / AGE_ENGINE_DIRNAME
 AGE_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / AGE_ENGINE_DIRNAME
 TOK_ENGINE_DIR = BENCH_ENGINE_DIR.parent / TOK_ENGINE_DIRNAME
 TOK_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / TOK_ENGINE_DIRNAME
+CAP16K_ENGINE_DIR = BENCH_ENGINE_DIR.parent / CAP16K_ENGINE_DIRNAME
+CAP16K_ENGINE_SYMLINK = BENCH_ENGINE_SYMLINK.parent / CAP16K_ENGINE_DIRNAME
 
 ARM_ENGINE = {ARM_SOMA: "somabench", ARM_BASELINE: "compressor",
               ARM_SOMA_GUARD: GUARD_ENGINE_DIRNAME,
               ARM_SOMA_AGE: AGE_ENGINE_DIRNAME,
-              ARM_SOMA_TOK: TOK_ENGINE_DIRNAME}
+              ARM_SOMA_TOK: TOK_ENGINE_DIRNAME,
+              ARM_SOMA_16K: CAP16K_ENGINE_DIRNAME}
 
-ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE, ARM_SOMA_TOK)
+ALL_ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE, ARM_SOMA_TOK, ARM_SOMA_16K)
 
 
 def _apply_patch_file(patch: Path, target_dir: Path) -> None:
@@ -264,6 +270,40 @@ def ensure_tok_symlink() -> Path:
     return TOK_ENGINE_SYMLINK
 
 
+def ensure_cap16k_engine(force: bool = False) -> Path:
+    """Build engines/soma16k = fresh live copy + cap16k.patch (derived, never hand-edited)."""
+    if CAP16K_ENGINE_DIR.exists():
+        if force:
+            shutil.rmtree(CAP16K_ENGINE_DIR)
+        else:
+            _verify_patched_engine(CAP16K_ENGINE_DIR, "cap16k")
+            return CAP16K_ENGINE_DIR
+    if not CAP16K_PATCH.exists():
+        raise RuntimeError(f"cap16k patch missing: {CAP16K_PATCH} "
+                           "(regenerate: python3 soma_bench/patches/gen_cap16k_patch.py)")
+    CAP16K_ENGINE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        LIVE_SOMA_PLUGIN, CAP16K_ENGINE_DIR,
+        ignore=shutil.ignore_patterns(
+            "__pycache__", ".pytest_cache", "accounting.jsonl",
+            "bench_results", ".git", "*.pyc"),
+    )
+    _apply_patch_file(CAP16K_PATCH, CAP16K_ENGINE_DIR)
+    _verify_patched_engine(CAP16K_ENGINE_DIR, "cap16k")
+    return CAP16K_ENGINE_DIR
+
+
+def ensure_cap16k_symlink() -> Path:
+    if CAP16K_ENGINE_SYMLINK.is_symlink():
+        if Path(os.readlink(CAP16K_ENGINE_SYMLINK)).resolve() == CAP16K_ENGINE_DIR.resolve():
+            return CAP16K_ENGINE_SYMLINK
+        CAP16K_ENGINE_SYMLINK.unlink()
+    elif CAP16K_ENGINE_SYMLINK.exists():
+        raise RuntimeError(f"{CAP16K_ENGINE_SYMLINK} exists and is NOT a symlink — refusing.")
+    CAP16K_ENGINE_SYMLINK.symlink_to(CAP16K_ENGINE_DIR)
+    return CAP16K_ENGINE_SYMLINK
+
+
 def ensure_guard_symlink() -> Path:
     """Install-tree symlink 'somaguard' -> engines/somaguard (mirror of somabench)."""
     if GUARD_ENGINE_SYMLINK.is_symlink():
@@ -432,11 +472,14 @@ def setup_bench(force: bool = False) -> dict:
     ensure_age_symlink()
     ensure_tok_engine(force=force)
     ensure_tok_symlink()
+    ensure_cap16k_engine(force=force)
+    ensure_cap16k_symlink()
     setup_arm(ARM_SOMA, force=force)
     setup_arm(ARM_BASELINE, force=force)
     setup_arm(ARM_SOMA_GUARD, force=force)
     setup_arm(ARM_SOMA_AGE, force=force)
     setup_arm(ARM_SOMA_TOK, force=force)
+    setup_arm(ARM_SOMA_16K, force=force)
     return {
         "engine_copy": str(BENCH_ENGINE_DIR),
         "install_symlink": str(BENCH_ENGINE_SYMLINK),
@@ -446,6 +489,8 @@ def setup_bench(force: bool = False) -> dict:
         "age_symlink": str(AGE_ENGINE_SYMLINK),
         "tok_engine": str(TOK_ENGINE_DIR),
         "tok_symlink": str(TOK_ENGINE_SYMLINK),
+        "cap16k_engine": str(CAP16K_ENGINE_DIR),
+        "cap16k_symlink": str(CAP16K_ENGINE_SYMLINK),
         "arms": {a: str(arm_home(a)) for a in ALL_ARMS},
         "model_lift": lift_live_config(),
     }
@@ -469,6 +514,10 @@ def verify_bench() -> dict:
     tlink = TOK_ENGINE_SYMLINK
     if not tlink.is_symlink() or Path(os.readlink(tlink)).resolve() != TOK_ENGINE_DIR.resolve():
         raise RuntimeError("install-tree 'somatok' symlink missing/mispointed")
+    _verify_patched_engine(CAP16K_ENGINE_DIR, "cap16k")
+    clink = CAP16K_ENGINE_SYMLINK
+    if not clink.is_symlink() or Path(os.readlink(clink)).resolve() != CAP16K_ENGINE_DIR.resolve():
+        raise RuntimeError("install-tree 'soma16k' symlink missing/mispointed")
     for arm in ALL_ARMS:
         _verify_arm(arm_home(arm), arm)
     return {"ok": True}

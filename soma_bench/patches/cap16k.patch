@@ -1,0 +1,13 @@
+--- engine.py
++++ engine.py
+@@ -41,8 +41,8 @@
+ # floor lowered 32K -> 24K (2026-09-07, user request): the 24-32K band was
+ # passing through untouched; now nothing under 24K is ever touched and
+ # everything over is capped at 24K.
+-PASSTHROUGH_CHARS = 24_000
+-MID_CEILING_CHARS = 24_000
++PASSTHROUGH_CHARS = 16_000
++MID_CEILING_CHARS = 16_000
+ MID_UPPER_CHARS = 53_300
+ KEEP_FRACTION = 0.60
+ LARGE_UPPER_CHARS = 53_300

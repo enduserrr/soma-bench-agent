@@ -32,7 +32,8 @@ ARM_BASELINE = "baseline"
 ARM_SOMA_GUARD = "soma-guard"
 ARM_SOMA_AGE = "soma-age"
 ARM_SOMA_TOK = "soma-tok"
-ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE, ARM_SOMA_TOK)
+ARM_SOMA_16K = "soma-16k"
+ARMS = (ARM_SOMA, ARM_BASELINE, ARM_SOMA_GUARD, ARM_SOMA_AGE, ARM_SOMA_TOK, ARM_SOMA_16K)
 
 # Install-tree symlink that points at the bench's ENGINE COPY (never the live plugin).
 BENCH_ENGINE_SYMLINK = INSTALL_ENGINES / "somabench"

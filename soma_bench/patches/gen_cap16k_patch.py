@@ -19,10 +19,24 @@ MID_CEILING_CHARS = 24_000"""
 NEW = """PASSTHROUGH_CHARS = 16_000
 MID_CEILING_CHARS = 16_000"""
 
+# Flat-cap override: the sizing formula is
+#   min(MAX_KEEP_CHARS, max(MIN_PASSTHROUGH_CHARS, 60% * len))
+# so lowering the floor alone leaves MAX_KEEP_CHARS=24K -> a partial ladder
+# (27-40K results keep 60%, >40K keep 24K), NOT the approved flat 16K cap.
+# Clamp MAX_KEEP_CHARS to the floor in _load_soma (mirrors the existing
+# MIN_PASSTHROUGH_CHARS host-override pattern; vendored core stays pristine).
+OVR_OLD = """        if PASSTHROUGH_CHARS != mod.MIN_PASSTHROUGH_CHARS:
+            mod.MIN_PASSTHROUGH_CHARS = PASSTHROUGH_CHARS"""
+OVR_NEW = """        if PASSTHROUGH_CHARS != mod.MIN_PASSTHROUGH_CHARS:
+            mod.MIN_PASSTHROUGH_CHARS = PASSTHROUGH_CHARS
+        mod.MAX_KEEP_CHARS = PASSTHROUGH_CHARS  # bench cap16k: flat cap, keep == floor"""
+
 def main() -> int:
     live = LIVE.read_text(encoding="utf-8")
     assert live.count(OLD) == 1, f"anchor matched {live.count(OLD)} times"
-    edited = live.replace(OLD, NEW)
+    assert live.count(OVR_OLD) == 1, f"override anchor matched {live.count(OVR_OLD)} times"
+    edited = live.replace(OLD, NEW).replace(OVR_OLD, OVR_NEW)
+    assert "MAX_KEEP_CHARS = PASSTHROUGH_CHARS" in edited
     diff = difflib.unified_diff(live.splitlines(keepends=True),
                                 edited.splitlines(keepends=True),
                                 fromfile="engine.py", tofile="engine.py")

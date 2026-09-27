@@ -11,3 +11,10 @@
  MID_UPPER_CHARS = 53_300
  KEEP_FRACTION = 0.60
  LARGE_UPPER_CHARS = 53_300
+@@ -515,5 +515,6 @@
+         spec.loader.exec_module(mod)
+         if PASSTHROUGH_CHARS != mod.MIN_PASSTHROUGH_CHARS:
+             mod.MIN_PASSTHROUGH_CHARS = PASSTHROUGH_CHARS
++        mod.MAX_KEEP_CHARS = PASSTHROUGH_CHARS  # bench cap16k: flat cap, keep == floor
+         _soma_mod = mod
+     return _soma_mod

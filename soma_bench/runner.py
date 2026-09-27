@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,10 +29,10 @@ def run_task(arm_home: Path, task: dict, task_dir: Path, *,
              timeout_s: int = 1800, model_setup: dict | None = None,
              run_env_extra: dict | None = None) -> dict:
     """Execute one task on one arm. Returns a run record (no scoring)."""
-    workdir = task_dir / "work"
-    if workdir.exists():
+    workdir = Path(tempfile.mkdtemp(prefix=f"sb-work-{task.get('task_id', 'task')}-",
+                                    dir="/tmp"))
+    if workdir.exists():  # pragma: no cover - mkdtemp always fresh
         shutil.rmtree(workdir)
-    workdir.mkdir(parents=True)
 
     # Materialize the task workspace (repo copy or synthetic tree)
     if task.get("repo_copy"):

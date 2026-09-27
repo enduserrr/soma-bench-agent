@@ -18,10 +18,13 @@ An agent-level A/B benchmark that measures what a context compressor **actually 
 
 ### Results at a glance
 
-Full data: [`results/RESULTS.md`](results/RESULTS.md) (per-run CSVs alongside), analysis: `REPORT-*.md`.
+Full data: [`results/RESULTS.md`](results/RESULTS.md) (per-run CSVs alongside).
+Decision reports: [`REPORT-cap16k.md`](REPORT-cap16k.md) (flat 16K cap vs live
+24K — the only variant that beat the live config), `REPORT-age-long.md`
+(age-tiered re-compression), `REPORT-tok-ladder.md` (token-unit sizing ladder).
 
 - **SOMA vs no-SOMA:** −31% … −71% weighted tokens on oversized-result tasks, resolution parity or better.
-- **Flat 16K-char birth cap vs live 24K:** −24.3% weighted tokens / −93% resident chars on medium sessions — the only variant that beat the live config.
+- **Flat 16K-char birth cap vs live 24K:** −24.3% weighted tokens / −93% resident chars on medium sessions — the only variant that beat the live config. Adopted live (as a flat 18K cap for extra fidelity margin) in the [SOMA Hermes plugin](https://github.com/enduserrr/SOMA-Hermes-Plugin); see that repo's `docs/REPORT-cap16k.md`.
 - **Rejected with evidence:** marginal-rewrite guard (+90.8%), age-tiered re-compression (+210%), token-unit ladder (structurally inert — terminal results are pre-capped at 50K chars by the agent harness).
 
 ### Important links

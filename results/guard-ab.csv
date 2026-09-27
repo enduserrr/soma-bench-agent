@@ -1,0 +1,13 @@
+task,arm,repeat,resolved,excluded,weighted_tokens,input_tokens,cache_read_tokens,output_tokens,resident_chars,wall_s
+soma-bench-003,soma,1,True,,52627,21229,197824,3872,103498,114.6
+soma-bench-003,baseline,1,True,,180313,54821,713664,18042,104352,453.5
+soma-bench-003,soma-guard,1,False,,43900,12213,191744,4171,1988,124.1
+soma-bench-003,soma,2,True,,42918,14449,140032,4822,2803,134.1
+soma-bench-003,baseline,2,False,,151758,56767,816320,4453,104665,168.0
+soma-bench-003,soma-guard,2,True,,52500,16659,223744,4489,3392,132.6
+soma-bench-004,soma,1,True,,45460,24153,183552,984,54517,75.1
+soma-bench-004,baseline,1,True,,31152,19021,108288,434,53627,41.1
+soma-bench-004,soma-guard,1,True,,45662,24910,175872,1055,54199,64.3
+soma-bench-004,soma,2,True,,28222,10614,154176,730,54158,53.5
+soma-bench-004,baseline,2,False,,96495,58947,320128,1845,19420,101.2
+soma-bench-004,soma-guard,2,True,,46276,25947,179136,805,53984,63.2

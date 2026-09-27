@@ -1,76 +1,44 @@
-# SOMA-BENCH
+# SOMA BENCH
 
-A/B benchmark for the SOMA context compressor on this Hermes instance. Runs
-SWE-bench-style tasks through **two matched Hermes subagents** — one with the
-SOMA context engine (a bench-isolated copy), one with the stock built-in
-compressor — and scores token/char savings + task performance with the Dendrite
-SOMA SWE scoring formulas.
+An agent-level A/B benchmark that measures what a context compressor **actually does to an autonomous agent** — token cost, cache behavior, resident context size, and task success — by running the same task through two (or more) matched Hermes agent "arms" that differ *only* in their context engine. Built to evaluate [DendriteHQ's SOMA compressor](https://github.com/DendriteHQ/SOMA-OpenClaw-compressor) on a real Hermes Agent instance, with [DendriteHQ/SOMA-benchmark](https://github.com/DendriteHQ/SOMA-benchmark)'s SWE scoring spec ported for comparable metrics.
 
-Maintained by the `soma-bench` skill (Hermes: `skill_view(name="soma-bench")`).
-That skill is the operating manual; this README is the short orientation.
+### WHAT'S NEW vs the original SOMA-benchmark
 
-## Safety model
-
-- The LIVE plugin at `~/.hermes/plugins/context_engine/soma/` is **never
-  modified, never loaded** by the bench. A byte-verified copy lives at
-  `engines/somabench/`, loaded via an install-tree symlink
-  `~/.hermes/hermes-agent/plugins/context_engine/somabench` (an ADDITIONAL name
-  — the live `soma` symlink is untouched). SOMA's `accounting.jsonl` therefore
-  writes inside this repo, never into the live plugin.
-- Arms run under scratch `HERMES_HOME`s at `profiles/<arm>/` (own `state.db`,
-  config, empty skills; `.env` symlinked for identical credentials). The live
-  `~/.hermes/state.db` is never written.
-- Arms differ ONLY in `context.engine` (`somabench` vs `compressor`); everything
-  else (model, provider, reasoning, toolsets, max_turns) is lifted from the
-  live config so both arms match the instance.
-
-## Usage
-
-```bash
-cd ~/git/SOMA-BENCH
-python3 -m soma_bench.orchestrate setup    # engine copy + symlink + arm homes
-python3 -m soma_bench.orchestrate verify   # integrity check (read-only)
-python3 -m soma_bench.orchestrate tasks    # list the corpus
-python3 -m soma_bench.orchestrate run --tag myrun           # all tasks, both arms
-python3 -m soma_bench.orchestrate run -t soma-bench-004 --tag t4
-python3 -m soma_bench.orchestrate score myrun               # Dendrite scoring
-python3 -m soma_bench.orchestrate report myrun
-```
-
-## Task corpus
-
-| Task | Type | What it stresses |
+| | Dendrite `SOMA-benchmark` | this `SOMA-BENCH` |
 |---|---|---|
-| 001 | SWE-lite bugfix | baseline parity; small tool results (SOMA no-op) |
-| 002 | static needle hunt | large static file; agents may grep around it (dodge risk) |
-| 003 | static needle hunt | same, build-notes variant |
-| 004 | **runtime audit** | >24K terminal output produced at runtime (ungreppable in advance), needle mid-report, must re-run after fix → oversized result re-sent across turns — the true SOMA regime |
+| Purpose | subnet-miner evaluation at scale | single-instance, decision-grade A/B of compressor variants |
+| Test subjects | miner compressor services over an API | context-engine plugins loaded into matched Hermes subagents |
+| Arms | miner vs reference | any engine variant: live SOMA copy, no-SOMA baseline, patched variants (guard / age-tier / token-ladder / flat-16K) |
+| Scoring | SWE formulas: weighted tokens (in×1.0 + cache×0.1 + out×3.0), r-based resolution score | **identical formulas, ported and unit-verified** (23/23 checks vs the published spec) |
+| Tasks | their SWE-bench-derived set | self-contained pocket tasks (SWE-bench-style: broken repo → fix → tests must pass) with oversized tool results in the regimes compressors actually engage (>24K chars) |
+| Engine isolation | n/a (remote service) | byte-verified copy of the live plugin; the live engine is never loaded or written by the bench |
+| Evidence discipline | — | per-run contamination checks (grep-dodge, /tmp dumping, cross-run file leakage), excluded-run documentation, invalid-run archiving |
 
-Task 004 is the reference design for SOMA-regime tasks. Static-file tasks
-(002/003) measure whether the agent reads the file whole vs greps; keep them
-as low-pressure/dodge-behavior probes, but don't expect SOMA savings there.
+**Why standalone rather than a fork:** no shared code — this bench ports the original's *scoring spec* (formulas, verified against the published docs) but every line of the harness is new. The original benchmarks *miners*; this benchmarks *variants of your own engine config* before you change anything live. Several proposed "improvements" were killed by this bench before ever reaching production (see `results/RESULTS.md`).
 
-## Metrics captured per arm-run
+### Results at a glance
 
-- Provider-reported tokens (billing truth, read-only sqlite from the arm's
-  state.db): input / output / cache_read / cache_write / reasoning, api calls.
-- Persisted-history chars per role/tool (`messages.content`).
-- Stream-json events: tool calls, durations, final text.
-- SOMA engine accounting (bench copy only): per-request chars/tokens in→out,
-  results capped, reason.
-- Dendrite SWE score per task + aggregate (weights 1.0/0.1/3.0, r =
-  clamp(log2(T_B/T_A)), zones, hard boost, normalized [-1,1]).
+Full data: [`results/RESULTS.md`](results/RESULTS.md) (per-run CSVs alongside), analysis: `REPORT-*.md`.
 
-## Results layout
+- **SOMA vs no-SOMA:** −31% … −71% weighted tokens on oversized-result tasks, resolution parity or better.
+- **Flat 16K-char birth cap vs live 24K:** −24.3% weighted tokens / −93% resident chars on medium sessions — the only variant that beat the live config.
+- **Rejected with evidence:** marginal-rewrite guard (+90.8%), age-tiered re-compression (+210%), token-unit ladder (structurally inert — terminal results are pre-capped at 50K chars by the agent harness).
 
-`runs/<tag>/`: `run.json` (config), `rows.jsonl` (one row per task-arm-repeat),
-`<task>/<arm>_r<N>/record.json` (full record incl. events), `work/` (the
-agent's actual workspace), `summary.json` (scored comparison).
+### Important links
+- [INSTALL.md](INSTALL.md) — install, configure, and run (humans and agents)
+- [ARCHITECTURE.md](ARCHITECTURE.md) — arms, isolation model, scoring, task format
+- [results/RESULTS.md](results/RESULTS.md) — every run, every verdict
+- [DendriteHQ/SOMA-OpenClaw-compressor](https://github.com/DendriteHQ/SOMA-OpenClaw-compressor) — the compressor under test
+- [DendriteHQ/SOMA-benchmark](https://github.com/DendriteHQ/SOMA-benchmark) — the scoring spec this bench ports
+- [thesoma.ai/docs/miner/scoring](https://thesoma.ai/docs/miner/scoring) — published scoring formulas
 
-## Provenance
+### Safety model (read before running)
 
-- Scoring: thesoma.ai/docs/miner/scoring (Sep 2026 spec), ported in
-  `soma_bench/scoring.py`.
-- Benchmark design modeled on github.com/DendriteHQ/SOMA-benchmark (their
-  backends: OpenClaw/Copilot in docker; ours: matched Hermes subagents under
-  scratch homes, no docker required).
+- The live SOMA plugin (`~/.hermes/plugins/context_engine/soma/`) is **never modified, never loaded**. Arms run from a byte-verified copy under `engines/`, loaded via an additional install-tree symlink (the live `soma` name is untouched).
+- Each arm runs in its own scratch `HERMES_HOME` (own `state.db`, own config, empty skills); task agents run in throwaway `/tmp` workdirs, outside this repo — agents cannot reach other runs' files.
+- Secrets are never copied: arm configs reference the same env-var *name* the live config uses; `.env` is a read-only symlink.
+- `tasks/` (answer keys) and raw run records are git-ignored — they stay local, never published.
+
+### License
+
+MIT.

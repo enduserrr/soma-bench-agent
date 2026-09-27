@@ -1,0 +1,7 @@
+task,arm,repeat,resolved,excluded,weighted_tokens,input_tokens,cache_read_tokens,output_tokens,resident_chars,wall_s
+soma-bench-005,soma,1,True,,35335,18445,127680,1374,54855,73.0
+soma-bench-005,baseline,1,True,,41958,24210,136384,1370,53969,72.8
+soma-bench-005,soma-guard,1,True,,64716,41883,177600,1691,55089,94.1
+soma-bench-005,soma,2,True,,39877,24917,124672,831,54082,56.7
+soma-bench-005,baseline,2,True,,89469,69902,137984,1923,54390,96.8
+soma-bench-005,soma-guard,2,True,,78777,53969,187904,2006,54933,69.7

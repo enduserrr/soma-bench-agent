@@ -1,0 +1,3 @@
+task,arm,repeat,resolved,excluded,weighted_tokens,input_tokens,cache_read_tokens,output_tokens,resident_chars,wall_s
+soma-bench-002,baseline,1,True,,23929,16227,56768,675,5584,38.2
+soma-bench-002,soma,1,True,,23257,17332,44672,486,7128,34.4

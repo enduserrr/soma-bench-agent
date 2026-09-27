@@ -4,7 +4,8 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/home/hermes/.hermes/hermes-agent")
+HERMES_AGENT_DIR = Path.home() / ".hermes" / "hermes-agent"
+sys.path.insert(0, str(HERMES_AGENT_DIR))
 sys.path.insert(0, str(Path.home() / "git/SOMA-BENCH"))
 from plugins.context_engine import load_context_engine
 

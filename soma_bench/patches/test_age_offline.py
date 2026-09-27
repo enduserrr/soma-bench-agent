@@ -47,13 +47,13 @@ soma = mod._load_soma()
 
 
 def report_like(kb: int) -> str:
-    """~kb*1024 chars of noise + a pinned incident line (task-006 shape)."""
+    """~kb*1024 chars of noise + a pinned incident line (synthetic multi-phase-report shape)."""
     lines = [f"== REPORT =="]
     i = 0
     while sum(len(l) + 1 for l in lines) < kb * 1000:
         lines.append(f"metric node-{i%40:03d}.prod cpu={i%99}% mem={i%95}% io_wait={(i%400)/100:.2f}ms")
         i += 1
-    lines.append("INCIDENT services/opsshift/phase3/incident.log: NEEDLE-A1 metric_a=37 metric_b=5 — see runbooks/phase3.md")
+    lines.append("INCIDENT services/demo/phase3/incident.log: NEEDLE-A1 metric_a=37 metric_b=5 — see runbooks/phase3.md")
     return "\n".join(lines)
 
 

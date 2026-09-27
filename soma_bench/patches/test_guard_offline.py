@@ -47,7 +47,7 @@ def pinned_dense_payload(target_kb: int = 40) -> str:
             lines.append("ok")  # short, unpinned, zero TF-IDF value
             total += 3
         else:
-            l = f"/home/hermes/git/repo/src/module_{i % 977}/file_{i:05d}.py:{i % 900 + 1}: ok status=pass"
+            l = f"/repo/src/module_{i % 977}/file_{i:05d}.py:{i % 900 + 1}: ok status=pass"
             lines.append(l)
             total += len(l) + 1
         i += 1
